@@ -5,6 +5,42 @@
      Add ?mock=1 to the URL to use a built-in simulated device. -->
 <html lang="ja">
 <head>
+<script>
+/* iOS Web MIDI browser apps (a WKWebView with a JS Web MIDI shim) often show no prompt/confirm/alert and cannot
+ * download files. There: prompt takes its default, confirm asks for a second tap, alert is a toast, and downloads
+ * open a panel to share / copy the file. */
+window.IOS_SHIM = (() => {
+  try {
+    const r = navigator.requestMIDIAccess;
+    return typeof r === "function" && !/\[native code\]/.test(Function.prototype.toString.call(r)) && !!(window.webkit && window.webkit.messageHandlers);
+  } catch (e) { return false; }
+})();
+(() => {
+  if (!window.IOS_SHIM) return;
+  const toast = (msg, ms = 4000) => {
+    let t = document.getElementById("ios-toast");
+    if (!t) {
+      t = document.createElement("div");
+      t.id = "ios-toast";
+      t.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:90vw;z-index:99999;background:#222;color:#fff;border:1px solid #f60;border-radius:10px;padding:12px 16px;font:15px system-ui;box-shadow:0 4px 20px #0008;white-space:pre-wrap";
+      document.body.append(t);
+    }
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, ms);
+  };
+  window.iosToast = toast;
+  let pending = null;
+  window.confirm = (msg) => {
+    const now = Date.now();
+    if (pending && pending.msg === String(msg) && now - pending.t < 10000) { pending = null; return true; }
+    pending = { msg: String(msg), t: now };
+    toast(String(msg) + "\n\n→ Toque de novo para confirmar", 10000);
+    return false;
+  };
+  window.prompt = (msg, def) => (def == null ? "" : String(def));
+  window.alert = (msg) => toast(String(msg));
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SLOOP Editor</title>
@@ -8747,6 +8783,7 @@ function chopZip() {
   const zones = chopZones(CH.x, chopChops(), CH.key0, CH.mode, Math.max(0, CH.sel));
   if (!zones.length) return;
   const blob = new Blob([zipStore(zones.map((z) => ({ name: `${CH.name}/${z.fname}`, data: wavFile(z.s) })))], { type: "application/zip" });
+  if (window.IOS_SHIM) { iosSavePanel(`${CH.name}-chops.zip`, blob, null); return; }
   const a = el("a", { href: URL.createObjectURL(blob), download: `${CH.name}-chops.zip` });
   document.body.append(a);
   a.click();
@@ -9463,8 +9500,46 @@ $("libdel").addEventListener("click", async () => {
   renderLib();
 });
 
+/* iOS shim browsers: no downloads. A panel to share the file (Save to Files) or copy it as text */
+function iosSavePanel(name, blob, text) {
+  document.getElementById("ios-save")?.remove();
+  const box = document.createElement("div");
+  box.id = "ios-save";
+  box.style.cssText = "position:fixed;inset:0;z-index:99998;background:#000c;display:flex;align-items:center;justify-content:center;padding:16px";
+  const card = document.createElement("div");
+  card.style.cssText = "background:#1b1b1f;color:#fff;border:1px solid #f60;border-radius:12px;padding:18px;max-width:560px;width:100%;font:15px system-ui;display:flex;flex-direction:column;gap:10px";
+  const h = document.createElement("div"); h.textContent = "Salvar " + name; h.style.cssText = "font-weight:600;font-size:17px";
+  const msg = document.createElement("div"); msg.style.cssText = "color:#bbb;font-size:13px";
+  const btn = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+    b.style.cssText = "padding:12px;border-radius:8px;border:0;background:#f60;color:#000;font:600 15px system-ui"; b.onclick = fn; return b; };
+  const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
+  const share = btn("Compartilhar / Salvar em Arquivos", async () => {
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
+      else if (navigator.share && text != null) await navigator.share({ title: name, text });
+      else { msg.textContent = "Este app não tem compartilhamento. Use Copiar."; return; }
+      msg.textContent = "Pronto.";
+    } catch (e) { msg.textContent = e && e.name === "AbortError" ? "Cancelado." : "Não deu para compartilhar (" + (e && e.message || e) + "). Use Copiar."; }
+  });
+  card.append(h, share);
+  let ta = null;
+  if (text != null) {
+    ta = document.createElement("textarea"); ta.value = text; ta.readOnly = true;
+    ta.style.cssText = "width:100%;height:120px;background:#000;color:#9f9;border:1px solid #444;border-radius:6px;font:11px ui-monospace,monospace";
+    card.append(btn("Copiar conteúdo (colar num arquivo " + name.split(".").pop() + ")", async () => {
+      let ok = false;
+      try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) {}
+      if (!ok) { try { ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); ok = document.execCommand("copy"); } catch (e) {} }
+      msg.textContent = ok ? "Copiado. Cole no app Notas ou num arquivo de texto e salve com o nome " + name + "." : "Não copiou: toque no texto, Selecionar tudo e Copiar.";
+    }), ta);
+  }
+  card.append(btn("Fechar", () => box.remove()), msg);
+  box.append(card);
+  document.body.append(box);
+}
 function download(name, obj) {
   const blob = new Blob([JSON.stringify(obj, null, 1)], { type: "application/json" });
+  if (window.IOS_SHIM) { iosSavePanel(name, blob, JSON.stringify(obj)); return; }
   const a = el("a", { href: URL.createObjectURL(blob), download: name });
   document.body.append(a);
   a.click();
@@ -9474,6 +9549,7 @@ function download(name, obj) {
 const fileSlug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "patch";
 function downloadBytes(name, bytes) {
   const blob = new Blob([bytes], { type: "application/octet-stream" });
+  if (window.IOS_SHIM) { iosSavePanel(name, blob, null); return; }
   const a = el("a", { href: URL.createObjectURL(blob), download: name });
   document.body.append(a);
   a.click();
@@ -9795,7 +9871,7 @@ $("sf-file").addEventListener("change", async () => {
   let file;
   try { file = JSON.parse(await f.text()); songObjects(file); }
   catch (e) { sayK("songBadFile", ""); return; }
-  if (!confirm(t("sfConfirm").replace("{name}", file.name || f.name))) return;
+  if (!window.IOS_SHIM && !confirm(t("sfConfirm").replace("{name}", file.name || f.name))) return;
   await op(async () => {
     try {
       await songLoadUI(file, bkProgress("sfLoading"));
@@ -9812,7 +9888,7 @@ $("bk-file").addEventListener("change", async () => {
   let file;
   try { file = JSON.parse(await f.text()); backupObjects(file); }
   catch (e) { sayK("bkBad", e.message); return; }
-  if (!confirm(t("bkConfirm"))) return;
+  if (!window.IOS_SHIM && !confirm(t("bkConfirm"))) return;
   await op(async () => {
     try {
       selfLoad();
