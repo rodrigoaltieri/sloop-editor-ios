@@ -39,6 +39,10 @@ window.IOS_SHIM = (() => {
   };
   window.prompt = (msg, def) => (def == null ? "" : String(def));
   window.alert = (msg) => toast(String(msg));
+  /* the iOS file picker greys out extensions it does not know (.sloopsong, .syx…): accept any file, the page checks it */
+  const openAll = () => document.querySelectorAll('input[type="file"][accept]').forEach((i) => i.removeAttribute("accept"));
+  const watch = () => { openAll(); new MutationObserver(openAll).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["accept"] }); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", watch); else watch();
 })();
 </script>
 <meta charset="utf-8">
